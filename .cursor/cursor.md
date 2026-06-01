@@ -52,7 +52,7 @@ YOLOv8 Pose Extraction
 Manual Labeling (YOU HAVE TO DO THIS)
   • Watch each video, note which frames each rep starts and ends
   • Fill data/annotations/reps.csv with rep_start, rep_end, form_label
-  • If you skip this, the system uses automatic rule-based labels (OK but not great)
+  • This is REQUIRED — training will skip any video that has no rows in reps.csv
         ↓
 [STEP 3 — Friend's GPU machine, REQUIRED]
 Training the Neural Network
@@ -350,7 +350,9 @@ python scripts/validate_annotations.py \
   --skeleton_dir data/processed/skeletons
 ```
 
-> **If you don't label anything:** The system will still train using automatic rule-based labels generated from the joint angles. This is called "hybrid mode" and it works, but manual labels produce better results.
+> **Labeling is required.** Training is set to manual-only mode (`source: manual`, `fallback_to_rules: false`).
+> Any video without rows in `reps.csv` will have its form head masked off during training.
+> Label every video before running `train.py`.
 
 ---
 
@@ -513,8 +515,8 @@ data:
     - shoulder_press        # index 2
     - triceps               # index 3
   labeling:
-    source: hybrid          # "hybrid" = use manual labels if available, rules otherwise
-    fallback_to_rules: true # If no manual label for a video, auto-generate using form_rules.py
+    source: manual          # manual only — reps.csv is required for every video
+    fallback_to_rules: false # no automatic fallback — all labels must be human-provided
 
 training:
   epochs: 200               # Maximum training rounds (stops early if not improving)
@@ -531,22 +533,17 @@ pose:
 
 ---
 
-## How the Labeling System Works (Hybrid Mode)
+## How the Labeling System Works (Manual Mode)
 
-For each video, the training pipeline asks:
-> "Do we have human labels for this video in reps.csv?"
+Every video MUST have at least one row in `data/annotations/reps.csv`.
+There is no automatic fallback — if a video has no labels, its windows get `rep_label = 0`
+and `form_valid = False`, meaning the form head is masked off for that video during training.
 
-```
-YES → Use human labels (rep_start, rep_end, form_label from reps.csv)
-NO  → Run segment_reps() on the joint angles to auto-detect reps
-       + Run score_form() to auto-score form quality
-       → Use those as labels
-```
-
-Either way, the labels get converted to per-window format:
-- A 30-frame window that **overlaps a rep** → `rep_label = 1`
-- A 30-frame window that **doesn't overlap a rep** → `rep_label = 0`
-- `form_label` = the form score of the rep with most overlap in that window
+Labels get converted to per-window format:
+- A 30-frame window that **overlaps a labeled rep** → `rep_label = 1`
+- A 30-frame window with **no labeled rep** → `rep_label = 0`
+- `form_label` = the form_label of the rep with the most frame overlap in that window
+- Windows with no rep overlap have `form_valid = False` (form loss is masked, not counted)
 
 ---
 
@@ -576,7 +573,7 @@ You are working on an exercise detection project. Here is what you need to know:
 4. **The GPU machine is where training should run** — transfer `data/` folder there.
 5. **configs/default.yaml is the single source of truth** — never hardcode values.
 6. **The model architecture**: ST-GCN backbone → Angle MLP → BiLSTM → 3 heads (exercise, form, rep).
-7. **Labeling**: reps.csv is currently empty. Hybrid mode will use auto-rules if no manual labels exist.
+7. **Labeling is REQUIRED**: `source: manual`, `fallback_to_rules: false`. Every video needs rows in `reps.csv`. No auto-fallback.
 8. **Do not rename exercise folders** — the code maps "bench press" → bench_press automatically.
 9. **checkpoints/best.pt does not exist yet** — it will be created after training.
 10. **If the user asks to run training** — confirm GPU is available first with `torch.cuda.is_available()`.

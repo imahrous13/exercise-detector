@@ -21,10 +21,9 @@ data:
     - shoulder_press
     - triceps
   labeling:
-    source: hybrid                 # hybrid | manual | rules
+    source: manual                 # manual only — no automatic fallback
     annotations_file: data/annotations/reps.csv
-    fallback_to_rules: true      # unlabeled videos → segment_reps + score_form
-    rules_rep_completion_in_window: true  # rep head: rep_end in window for rule labels
+    fallback_to_rules: false     # disabled — every video must be labeled in reps.csv
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
