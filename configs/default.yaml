@@ -1,0 +1,59 @@
+model:
+  num_joints: 17
+  in_channels: 6             # x, y, confidence, vx, vy, bone_length (was 3)
+  gcn_channels: [64, 128, 256, 512]   # added 4th block (was [64, 128, 256])
+  tcn_kernel_size: 9
+  lstm_hidden: 256            # was 128
+  lstm_layers: 2
+  dropout: 0.4                # was 0.3
+  num_exercises: 4            # optional: derived from data.exercises length if omitted
+  num_form_classes: 2
+  num_rep_classes: 2          # rep head: 0=no rep completed, 1=rep completed in window
+  num_angles: 12              # angle branch input size
+  angle_hidden: 64             # angle branch hidden dim
+
+data:
+  window_size: 30
+  stride: 15
+  exercises:
+    - bench_press
+    - biceps
+    - shoulder_press
+    - triceps
+  labeling:
+    source: hybrid                 # hybrid | manual | rules
+    annotations_file: data/annotations/reps.csv
+    fallback_to_rules: true      # unlabeled videos → segment_reps + score_form
+    rules_rep_completion_in_window: true  # rep head: rep_end in window for rule labels
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  video_dir: ../workoutfitness-video
+  augmentation:
+    enabled: true
+    gaussian_noise_std: 0.015
+    horizontal_flip: true
+    random_scale_range: [0.9, 1.1]
+    temporal_crop_min: 25
+    joint_dropout_prob: 0.1
+    joint_dropout_max: 2
+
+training:
+  epochs: 200
+  batch_size: 32
+  learning_rate: 0.001
+  optimizer: adam
+  weight_decay: 0.0001
+  scheduler: cosine
+  warmup_epochs: 5
+  gradient_clip: 1.0
+  early_stopping_patience: 25
+  label_smoothing: 0.1
+  class_balanced_sampling: true
+  exercise_class_weights: true
+
+pose:
+  model_size: s          # n/s/m/l/x — larger = more stable (s good balance)
+  confidence_threshold: 0.5
+  smoothing_alpha: 0.35  # EMA blend (0=disabled, lower=smoother, 0.2-0.5 typical)
+  roi_padding_ratio: 0.2 # pad bbox by this ratio before cropping ROI; pose runs on crop (0=disable)
