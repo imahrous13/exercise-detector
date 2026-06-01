@@ -21,12 +21,16 @@ The user uploads a video (or uses their webcam live), and the app draws a skelet
 | Machine | Owner | Role | GPU? |
 |---|---|---|---|
 | Machine A | Ibrahim | Has the videos, runs the Streamlit app | No GPU (CPU only) |
-| Machine B | Friend | Has a GPU | YES — this is where training runs |
+| Machine B | Friend | Has a GPU | YES — this is where EVERYTHING runs |
 
 **Why this matters:**
-- **Pose extraction** (`prepare_data.py`) processes videos and extracts skeleton data. It CAN use GPU if CUDA is available, but it runs on Ibrahim's machine because that's where the videos are. On CPU it takes ~6 minutes per video × 125 videos = ~12 hours.
-- **Training** (`train.py`) is the part that MUST run on the GPU machine. Training a deep learning model on CPU would take days. On a decent GPU it takes 30–90 minutes.
-- **The handoff**: Ibrahim runs extraction → copies the `data/` folder to the friend's machine → friend trains → copies `checkpoints/best.pt` back to Ibrahim.
+- **Pose extraction** (`prepare_data.py`) uses YOLOv8 to process every video frame. It automatically uses GPU if CUDA is available — on GPU it takes ~20 seconds per video vs ~6 minutes on CPU. 125 videos = **~40 minutes on GPU vs ~12 hours on CPU**.
+- **Training** (`train.py`) MUST run on GPU. On CPU it would take days. On a decent GPU it takes 30–90 minutes.
+- **The handoff**: Copy the videos to the friend's machine → friend runs the FULL pipeline (extraction + training) → friend copies `checkpoints/best.pt` back to Ibrahim.
+
+> **IMPORTANT FOR THE FRIEND**: You must run `prepare_data.py` on ALL 125 videos from scratch.
+> **Do NOT use `--resume` or `--skip_extraction` flags** — those are recovery flags only.
+> The clean command has NO extra flags. See STEP 1 below.
 
 ---
 
@@ -221,44 +225,81 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ---
 
-### STEP 1 — Extract Poses (Ibrahim's machine, already running)
+### STEP 1 — Extract Poses (Friend's GPU machine — run this first)
 
-> **STATUS: CURRENTLY RUNNING** — started automatically, ~12 hours on CPU
+**The videos must be organized EXACTLY like this on your machine:**
+```
+gym videos/
+├── bench press/     ← 37 videos  (folder name has a SPACE, not underscore)
+├── biceps/          ← 28 videos
+├── shoulder press/  ← 39 videos  (folder name has a SPACE)
+└── triceps/         ← 21 videos
+                     = 125 videos total
+```
 
+> **IMPORTANT**: The folder names MUST be exactly as shown above.
+> `bench press` not `bench_press`. `shoulder press` not `shoulder_press`.
+> The code handles the conversion automatically — don't rename the folders.
+
+**The command — run this ONCE, no extra flags, processes ALL 125 videos:**
 ```bash
-# From inside test2/ folder:
+# From inside the test2/ folder:
 python scripts/prepare_data.py \
-  --video_dir "C:\Users\ibrah\OneDrive\Desktop\exercise detector\gym videos" \
+  --video_dir "PATH\TO\gym videos" \
   --config configs/default.yaml
 ```
 
+Replace `PATH\TO\gym videos` with wherever you saved the gym videos folder.
+For example: `--video_dir "C:\Users\YourName\Desktop\gym videos"`
+
+**DO NOT add `--resume` or `--skip_extraction`** — those are recovery-only flags.
+Running without them processes every single video from scratch, which is what you want.
+
+**Your GPU will be used automatically.** You'll see PyTorch use CUDA for YOLOv8.
+On GPU: ~20 seconds per video × 125 videos = ~40 minutes total.
+
 **What it does:**
-- Walks through the 4 exercise folders (bench press, biceps, shoulder press, triceps)
-- For each video: runs every frame through YOLOv8 pose detection
-- Saves the result as `data/processed/skeletons/exercisename_videoname.npy`
-- Also saves `exercisename_videoname_angles.npy` (the 12 joint angles)
-- Creates `data/splits/train.csv`, `val.csv`, `test.csv` (70/15/15 split)
+- Walks through all 4 exercise folders
+- Runs every frame of every video through YOLOv8 pose detection
+- Detects 17 body keypoints per frame
+- Normalizes + computes 12 joint angles, velocity, bone length
+- Saves `data/processed/skeletons/exercisename_videoname.npy` (one per video)
+- Saves `exercisename_videoname_angles.npy` (joint angles, one per video)
+- At the end: creates `data/splits/train.csv`, `val.csv`, `test.csv`
 
-**If it crashes or stops early:**
-```bash
-# Resume from where it left off (skips already-processed videos):
-python scripts/prepare_data.py \
-  --video_dir "C:\Users\ibrah\OneDrive\Desktop\exercise detector\gym videos" \
-  --config configs/default.yaml \
-  --resume
+**What successful output looks like:**
 ```
+Video directory: C:\...\gym videos
+Output directory: ...\data\processed\skeletons
+Splits directory: ...\data\splits
 
-**Output you'll see:**
-```
 [bench_press] Processing 37 videos...
-bench_press: 100%|████████| 37/37 [3:45:00<00:00, 365.00s/it]
+bench_press: 100%|████████| 37/37 [12:20<00:00, 20.00s/it]
+
 [biceps] Processing 28 videos...
-...
+biceps: 100%|████████| 28/28 [09:20<00:00, 20.00s/it]
+
+[shoulder_press] Processing 39 videos...
+shoulder_press: 100%|████████| 39/39 [13:00<00:00, 20.00s/it]
+
+[triceps] Processing 21 videos...
+triceps: 100%|████████| 21/21 [07:00<00:00, 20.00s/it]
+
+==================================================
 Extraction complete: 125 succeeded, 0 failed
 train: 87 videos
 val: 18 videos
 test: 20 videos
 ```
+
+**If it crashes or stops mid-way** (power cut, error, etc.) — ONLY THEN use `--resume`:
+```bash
+python scripts/prepare_data.py \
+  --video_dir "PATH\TO\gym videos" \
+  --config configs/default.yaml \
+  --resume
+```
+`--resume` skips videos that were already processed and continues from where it stopped.
 
 ---
 
