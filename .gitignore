@@ -20,6 +20,7 @@ ENV/
 *.ipynb_checkpoints
 
 # ── Generated data (too large for GitHub — share via OneDrive/Google Drive) ───
+data/raw/
 data/processed/
 data/splits/
 
@@ -45,7 +46,7 @@ desktop.ini
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WHAT IS NOT IGNORED (intentionally kept in repo):
-#   data/annotations/reps.csv         ← your manual labels
+#   data/annotations/unified_reps.csv ← labeled rep segments (869 reps)
 #   configs/default.yaml              ← all settings
 #   src/                              ← all source code
 #   scripts/                          ← all runnable scripts

@@ -137,6 +137,11 @@ def resolve_skeleton_filename(
 
     if exercise:
         ex = exercise.strip().replace(" ", "_")
+        # Avoid double-prefixing: if the stem already starts with the exercise
+        # name (e.g. "bench_press_bench_press_002" with exercise "bench_press"),
+        # return the stem as-is rather than prepending again.
+        if stem.startswith(f"{ex}_"):
+            return stem
         return f"{ex}_{stem}"
     return stem
 

@@ -21,9 +21,9 @@ data:
     - shoulder_press
     - triceps
   labeling:
-    source: manual                 # manual only — no automatic fallback
-    annotations_file: data/annotations/reps.csv
-    fallback_to_rules: false     # disabled — every video must be labeled in reps.csv
+    source: unified                # use unified_reps.csv (multi-source) + rule fallback
+    annotations_file: data/annotations/unified_reps.csv
+    fallback_to_rules: true      # rule-based form scoring for videos not in unified_reps.csv
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15

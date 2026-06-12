@@ -185,7 +185,7 @@ class SkeletonDataset(Dataset):
             T = skeleton.shape[0]
             angles = np.load(angles_path) if os.path.exists(angles_path) else None
 
-            allow_rules = self.fallback_to_rules and self.source_mode in ("hybrid", "rules")
+            allow_rules = self.fallback_to_rules and self.source_mode in ("hybrid", "rules", "unified")
             reps, src = get_video_reps(
                 filename, exercise_name, angles, self.manual_index,
                 allow_rules_fallback=allow_rules,
