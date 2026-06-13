@@ -18,7 +18,7 @@ from src.pose_extraction.extractor import PoseExtractor
 from src.preprocessing.normalize import preprocess_skeleton, compute_angles
 from src.data.dataset import compute_extra_features
 from src.models.classifier import build_model
-from src.feedback.form_rules import get_exercise_names, EXERCISE_NAMES
+from src.feedback.form_rules import get_exercise_names, EXERCISE_NAMES, segment_reps, get_form_summary
 from src.utils.visualization import draw_skeleton, draw_feedback, create_output_video
 
 
@@ -33,7 +33,7 @@ def run_inference(video_path, model, extractor, device, window_size=30, stride=1
         window_size: frames per window
         stride: stride between windows
         exercise_names: optional list of class names (e.g. from config); if None, uses built-in
-        use_rep_head: if True and model has trained rep head, count reps from rep head; else 0
+        use_rep_head: ignored — reps are counted via angle-based rules (segment_reps)
 
     Returns:
         results: list of per-window result dicts
@@ -55,62 +55,65 @@ def run_inference(video_path, model, extractor, device, window_size=30, stride=1
     # Compute extra features (velocity + bone lengths): (T, 17, 3) -> (T, 17, 6)
     skeleton_features = compute_extra_features(normalized_kpts)
 
-    # Generate windows and run model
+    # Generate windows: model classifies exercise; rules score form and count reps
     model.eval()
-    results = []
-    window_assignments = [None] * T  # Maps each frame to its result
-    correct_reps, incorrect_reps = 0, 0
-    last_counted_frame = -100
-    rep_cooldown_frames = stride  # avoid double-counting overlapping windows
+    windows_data = []
 
     with torch.no_grad():
         for start in range(0, T - window_size + 1, stride):
             end = start + window_size
-            window_feat = skeleton_features[start:end]   # (30, 17, 6)
-            window_angles = angles[start:end]             # (30, 12)
+            window_feat = skeleton_features[start:end]
+            window_angles = angles[start:end]
 
-            # Model prediction (exercise, form, rep heads)
-            x = torch.FloatTensor(window_feat).unsqueeze(0).to(device)      # (1, 30, 17, 6)
-            a = torch.FloatTensor(window_angles).unsqueeze(0).to(device)     # (1, 30, 12)
-            exercise_logits, form_logits, rep_logits = model(x, a)
+            x = torch.FloatTensor(window_feat).unsqueeze(0).to(device)
+            a = torch.FloatTensor(window_angles).unsqueeze(0).to(device)
+            exercise_logits, _, _ = model(x, a)
 
             exercise_pred = exercise_logits.argmax(1).item()
-            form_pred = form_logits.argmax(1).item()
             exercise_conf = torch.softmax(exercise_logits, 1).max().item()
-            form_probs = torch.softmax(form_logits, 1).cpu().numpy()[0]
-            form_score = int(round(100 * form_probs[1]))  # prob of correct class
 
-            # Learned rep head: count rep when prob(rep) > 0.5 and cooldown passed; correct/incorrect from form
-            if use_rep_head:
-                rep_probs = torch.softmax(rep_logits, 1).cpu().numpy()[0]
-                rep_prob = float(rep_probs[1])
-                end_frame = end - 1
-                if rep_prob > 0.5 and end_frame >= last_counted_frame + rep_cooldown_frames:
-                    if form_pred == 1:
-                        correct_reps += 1
-                    else:
-                        incorrect_reps += 1
-                    last_counted_frame = end_frame
+            windows_data.append({
+                'start': start,
+                'end': end,
+                'exercise_pred': exercise_pred,
+                'exercise_conf': exercise_conf,
+                'window_angles': window_angles,
+            })
 
-            # Form from model only (rules used only for labeling training data)
-            result = {
-                'exercise': names[exercise_pred] if exercise_pred < len(names) else 'unknown',
-                'exercise_idx': exercise_pred,
-                'exercise_confidence': exercise_conf,
-                'is_correct': form_pred == 1,
-                'form_confidence': float(form_probs[form_pred]),
-                'form_score': form_score,
-                'feedback': [],
-                'start_frame': start,
-                'end_frame': end,
-                'correct_reps': correct_reps,
-                'incorrect_reps': incorrect_reps,
-            }
-            results.append(result)
+    # Rep segmentation on full video using majority-vote exercise
+    rep_segments = []
+    if windows_data:
+        from collections import Counter
+        dominant_idx = Counter(w['exercise_pred'] for w in windows_data).most_common(1)[0][0]
+        rep_exercise = names[dominant_idx] if dominant_idx < len(names) else names[0]
+        rep_segments = segment_reps(rep_exercise, angles)
 
-            # Assign result to frames in this window
-            for f in range(start, end):
-                window_assignments[f] = result
+    results = []
+    window_assignments = [None] * T
+
+    for w in windows_data:
+        start, end = w['start'], w['end']
+        form_info = get_form_summary(w['exercise_pred'], w['window_angles'], names)
+        end_frame = end - 1
+        c_reps = sum(1 for seg in rep_segments if seg[2] == 1 and seg[1] <= end_frame)
+        i_reps = sum(1 for seg in rep_segments if seg[2] == 0 and seg[1] <= end_frame)
+
+        result = {
+            'exercise': names[w['exercise_pred']] if w['exercise_pred'] < len(names) else 'unknown',
+            'exercise_idx': w['exercise_pred'],
+            'exercise_confidence': w['exercise_conf'],
+            'is_correct': form_info['is_correct'],
+            'form_score': form_info['score'],
+            'feedback': form_info['feedback'],
+            'start_frame': start,
+            'end_frame': end,
+            'correct_reps': c_reps,
+            'incorrect_reps': i_reps,
+        }
+        results.append(result)
+
+        for f in range(start, end):
+            window_assignments[f] = result
 
     # Handle remaining frames at the end
     if T >= window_size:

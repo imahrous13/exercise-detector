@@ -217,10 +217,11 @@ class PoseExtractor:
 
         Returns:
             keypoints: (17, 3) array [x, y, confidence] in full-frame coordinates, or None
+            roi_ox, roi_oy: crop offset for overlay (0, 0 when no detection)
         """
         all_kpts, all_bboxes = self._detect_all(frame)
         if len(all_kpts) == 0:
-            return None
+            return None, 0, 0
 
         # Choose which person: tracked or largest
         best_idx = -1

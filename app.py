@@ -26,7 +26,7 @@ from src.models.classifier import build_model
 from src.pose_extraction.extractor import PoseExtractor
 from src.preprocessing.normalize import preprocess_skeleton, compute_angles
 from src.data.dataset import compute_extra_features
-from src.feedback.form_rules import get_exercise_names, EXERCISE_NAMES
+from src.feedback.form_rules import get_exercise_names, EXERCISE_NAMES, RepCounter, get_rep_angle, get_form_summary
 from src.utils.visualization import draw_skeleton, draw_feedback, draw_person_boxes, create_output_video
 
 # ---------------------------------------------------------------------------
@@ -298,11 +298,9 @@ elif mode == "Live Webcam":
         config_ex_names = get_exercise_names(config)
         window_size = config["data"]["window_size"]
         stride = config["data"]["stride"]
-        # Rep counting from learned rep head (cooldown to avoid double-count)
-        webcam_correct_reps, webcam_incorrect_reps = 0, 0
-        webcam_last_counted_frame = -100
-        webcam_frame_counter = 0
-        rep_cooldown = stride
+        # Rep counting via angle-based rules (RepCounter)
+        rep_counter = RepCounter()
+        current_exercise = None
 
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
@@ -328,13 +326,19 @@ elif mode == "Live Webcam":
 
                 # If user selected a specific person, override tracking; else extract from ROI (crop-space keypoints)
                 sel = st.session_state.selected_person
-                if sel > 0 and sel <= len(all_kpts):
-                    idx = sel - 1  # 1-indexed to 0-indexed
-                    kpts, roi_ox, roi_oy = all_kpts[idx], 0, 0
-                    extractor._tracked_bbox = all_bboxes[idx]
+                if sel > 0 and sel <= len(all_bboxes):
+                    idx = sel - 1
+                    bbox = all_bboxes[idx]
+                    kpts, new_bbox, roi_ox, roi_oy = extractor._run_pose_on_roi(frame, bbox)
+                    if kpts is not None:
+                        extractor._tracked_bbox = new_bbox if new_bbox is not None else bbox
                     tracked_idx = idx
                 else:
-                    kpts, roi_ox, roi_oy = extractor.extract_from_frame(frame)
+                    out = extractor.extract_from_frame(frame)
+                    if out is None:
+                        kpts, roi_ox, roi_oy = None, 0, 0
+                    else:
+                        kpts, roi_ox, roi_oy = out
                     if kpts is not None and extractor._tracked_bbox is not None:
                         for i, bbox in enumerate(all_bboxes):
                             from src.pose_extraction.extractor import _bbox_iou
@@ -346,49 +350,54 @@ elif mode == "Live Webcam":
                 frame = draw_person_boxes(frame, all_bboxes, tracked_idx)
 
                 if kpts is not None:
-                    kpt_buffer.append(kpts)  # crop-space for model
+                    kpt_buffer.append(kpts)
                     frame_count += 1
-                    webcam_frame_counter += 1
+
+                    # Per-frame angles for live rep counting
+                    _, frame_angles = preprocess_skeleton(kpts[np.newaxis, ...])
+                    if current_exercise is not None:
+                        rep_angle = get_rep_angle(current_exercise, frame_angles, 0)
+                        if rep_angle is not None:
+                            ex_idx = (
+                                config_ex_names.index(current_exercise)
+                                if current_exercise in config_ex_names else 0
+                            )
+                            form_info_frame = get_form_summary(
+                                ex_idx, frame_angles, config_ex_names,
+                            )
+                            rep_counter.update(
+                                current_exercise, rep_angle, form_info_frame['is_correct'],
+                            )
+                            if current_result is not None:
+                                current_result['correct_reps'] = rep_counter.correct_reps
+                                current_result['incorrect_reps'] = rep_counter.incorrect_reps
 
                     # Run inference every <stride> frames once buffer is full
                     if len(kpt_buffer) == window_size and frame_count % stride == 0:
-                        window = np.array(kpt_buffer)  # (30, 17, 3)
+                        window = np.array(kpt_buffer)
                         norm_kpts, angles = preprocess_skeleton(window)
-
-                        # Compute extra features: (30, 17, 3) -> (30, 17, 6)
                         skel_features = compute_extra_features(norm_kpts)
 
                         with torch.no_grad():
                             x = torch.FloatTensor(skel_features).unsqueeze(0).to(device)
                             a = torch.FloatTensor(angles).unsqueeze(0).to(device)
-                            ex_logits, form_logits, rep_logits = model(x, a)
+                            ex_logits, _, _ = model(x, a)
                             ex_pred = ex_logits.argmax(1).item()
-                            form_pred = form_logits.argmax(1).item()
                             ex_conf = torch.softmax(ex_logits, 1).max().item()
-                            form_probs = torch.softmax(form_logits, 1).cpu().numpy()[0]
-                            form_score = int(round(100 * form_probs[1]))
 
-                        # Learned rep head: count with cooldown; correct/incorrect from form
-                        if use_rep_head:
-                            rep_probs = torch.softmax(rep_logits, 1).cpu().numpy()[0]
-                            rep_prob = float(rep_probs[1])
-                            if rep_prob > 0.5 and webcam_frame_counter >= webcam_last_counted_frame + rep_cooldown:
-                                if form_pred == 1:
-                                    webcam_correct_reps += 1
-                                else:
-                                    webcam_incorrect_reps += 1
-                                webcam_last_counted_frame = webcam_frame_counter
+                        current_exercise = (
+                            config_ex_names[ex_pred] if ex_pred < len(config_ex_names) else "unknown"
+                        )
+                        form_info = get_form_summary(ex_pred, angles, config_ex_names)
 
-                        exercise_name = config_ex_names[ex_pred] if ex_pred < len(config_ex_names) else "unknown"
-                        # Form from model only (rules used only for labeling training data)
                         current_result = {
-                            "exercise": exercise_name,
-                            "is_correct": form_pred == 1,
-                            "feedback": [],
+                            "exercise": current_exercise,
+                            "is_correct": form_info["is_correct"],
+                            "feedback": form_info["feedback"],
                             "confidence": ex_conf,
-                            "correct_reps": webcam_correct_reps,
-                            "incorrect_reps": webcam_incorrect_reps,
-                            "form_score": form_score,
+                            "correct_reps": rep_counter.correct_reps,
+                            "incorrect_reps": rep_counter.incorrect_reps,
+                            "form_score": form_info["score"],
                         }
 
                     # Draw skeleton overlay (convert crop keypoints to full-frame for drawing)
