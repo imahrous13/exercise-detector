@@ -170,10 +170,17 @@ def load_rep_annotations_csv(
     if df.empty:
         return {}
 
-    required = {"video", "rep_start", "rep_end", "form_label"}
+    # unified_reps.csv has extra columns and allows empty rep_start/rep_end
+    # (classification-only rows). Only the minimal set is required.
+    required = {"video"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Annotation CSV missing columns: {sorted(missing)}")
+
+    # add optional columns with defaults if absent
+    for col in ("rep_start", "rep_end", "form_label", "exercise", "mistake_type"):
+        if col not in df.columns:
+            df[col] = pd.NA
 
     index: Dict[str, VideoAnnotations] = {}
 
@@ -302,7 +309,7 @@ def get_annotations_path(config: dict, project_root: Optional[str] = None) -> Op
     data_cfg = config.get("data", {}) if config else {}
     labeling = data_cfg.get("labeling", {})
     source = labeling.get("source", "hybrid")
-    if source not in ("manual", "hybrid", "rules"):
+    if source not in ("manual", "hybrid", "unified", "rules"):
         return None
     path = labeling.get("annotations_file")
     if not path:

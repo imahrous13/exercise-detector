@@ -292,16 +292,39 @@ def create_dataloaders(skeleton_dir, splits_dir, window_size=30, stride=15,
     manual_index = load_annotations_index_safe(ann_path, get_exercise_names(config))
 
     if ann_path and manual_index:
-        print(f"Manual annotations: {ann_path} ({len(manual_index)} videos)")
+        print(f"Annotations loaded: {ann_path} ({len(manual_index)} videos with rep labels)")
     elif ann_path:
-        print(f"Manual annotations file exists but empty: {ann_path}")
+        print(f"Annotations file exists but has no usable rep rows: {ann_path}")
     else:
-        print("No manual annotations file — all videos use rule-based fallback.")
+        print("No annotations file — all videos use rule-based fallback.")
 
     print(
         f"Labeling mode: {cfg['source']} | "
         f"rule fallback: {cfg['fallback_to_rules']}"
     )
+
+    # for unified source, report task coverage from the CSV directly
+    if cfg["source"] == "unified" and ann_path and os.path.isfile(ann_path):
+        try:
+            _udf = pd.read_csv(ann_path)
+            _has_rep = (
+                _udf["rep_start"].notna() & _udf["rep_start"].astype(str).str.strip().ne("") &
+                _udf["rep_end"].notna()   & _udf["rep_end"].astype(str).str.strip().ne("")
+            ) if {"rep_start", "rep_end"}.issubset(_udf.columns) else pd.Series([False] * len(_udf))
+            _has_form = (
+                _udf["form_label"].notna() & _udf["form_label"].astype(str).str.strip().ne("")
+            ) if "form_label" in _udf.columns else pd.Series([False] * len(_udf))
+            _has_ex = (
+                _udf["exercise"].notna() & _udf["exercise"].astype(str).str.strip().ne("")
+            ) if "exercise" in _udf.columns else pd.Series([False] * len(_udf))
+            print(
+                f"  unified_reps.csv: {len(_udf)} total rows | "
+                f"exercise_clf={_has_ex.sum()} | "
+                f"rep_counting={_has_rep.sum()} | "
+                f"form_correction={_has_form.sum()}"
+            )
+        except Exception:
+            pass
 
     rep_cache = {}
     loaders = {}
